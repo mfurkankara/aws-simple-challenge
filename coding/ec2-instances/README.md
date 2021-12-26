@@ -1,0 +1,1 @@
+Returns the names and public ip addresses of instances on aws
