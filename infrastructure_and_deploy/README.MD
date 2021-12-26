@@ -179,3 +179,96 @@ resource "aws_security_group" "ec2-sg" {
 }
 
 ```
+
+
+Create configuring_ec2.sh for user_data (Docker swarm and nginx installation and proxy flask container)
+```bash
+
+#!/bin/sh
+sudo apt update -y
+
+sudo apt install nginx -y 
+echo "server {
+    listen 80;
+    server_name _;
+    location /myflaskapp {
+        proxy_pass http://localhost:5000/;
+        }
+    }" >> server
+sudo rm /etc/nginx-sites-enabled/default
+sudo nginx -t
+sudo nginx -s reload
+
+sudo mv server /etc/nginx/sites-enabled/
+sudo chown root:root /etc/nginx/sites-enabled/server
+
+
+sudo apt install -y docker.io
+sudo usermod -a -G docker ubuntu
+sudo docker swarm init
+
+sudo docker service create --name flask --publish published=5000,target=5000 mfurkankara/flask:1
+
+```
+
+
+Create ec2 instance in Auto Scaling Group with Application Load Balancer 
+
+```bash
+resource "aws_launch_configuration" "ec2-conf" {
+  name          = "ec2-config"
+  image_id      = var.AMI
+  instance_type = "t2.micro"
+  
+  key_name = "ec2"
+  user_data = "${file("configuring_ec2.sh")}"
+
+  security_groups = ["${aws_security_group.ec2-sg.id}"]
+}
+
+
+resource "aws_autoscaling_group" "ec2-asg" {
+  name                 = "ec2-asg-config"
+  launch_configuration = aws_launch_configuration.ec2-conf.name
+  min_size             = 1
+  max_size             = 1
+
+#   load_balancers    = [aws_elb.ec2-elb.name]
+#   health_check_type = "ELB"
+
+  vpc_zone_identifier = ["${aws_subnet.ec2-subnet-public-1.id}"]
+}
+
+
+resource "aws_alb" "ec2-alb" {
+  name            = "ec2-alb"
+  security_groups = ["${aws_security_group.ec2-sg.id}"]
+  subnets         = ["${aws_subnet.ec2-subnet-public-1.id}","${aws_subnet.ec2-subnet-public-2.id}"]
+  tags = {
+    Name = "ec2-alb"
+  }
+}
+
+resource "aws_alb_target_group" "ec2-alb-target" {
+  name     = "ec2-alb-target"
+  port     = 80
+  protocol = "HTTP"
+  vpc_id   = "${aws_vpc.ec2-vpc.id}"
+  health_check {
+    path = "/"
+    port = 80
+  }
+}
+
+resource "aws_alb_listener" "listener_http" {
+  load_balancer_arn = "${aws_alb.ec2-alb.arn}"
+  port              = "80"
+  protocol          = "HTTP"
+
+  default_action {
+    target_group_arn = "${aws_alb_target_group.ec2-alb-target.arn}"
+    type             = "forward"
+  }
+}
+
+```
